@@ -46,8 +46,9 @@ const AuthForm: React.FC<AuthFormProps> = ({ mode }) => {
       //   const { error } = await supabase.auth.signUp({ email, password });
       //   if (error) throw error;
       // }
-    } catch (err: any) {
-      setError(err.message || `An error occurred during ${mode}.`);
+    } catch (err: unknown) {
+      const errorMessage = err instanceof Error ? err.message : `An error occurred during ${mode}.`;
+      setError(errorMessage);
     } finally {
       setIsLoading(false);
     }
