@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { cn } from '@/lib/utils'; // Yeh function class names ko merge karne ke liye hai
 
-export interface InputProps extends React.InputHTMLAttributes<HTMLInputElement> {}
+export type InputProps = React.InputHTMLAttributes<HTMLInputElement>;
 
 // Main Input Component
 const Input = React.forwardRef<HTMLInputElement, InputProps>(
