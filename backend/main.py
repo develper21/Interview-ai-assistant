@@ -35,13 +35,14 @@ async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
     print("Client connected!")
 
-    # Google STT ke liye streaming config
+    # Google STT ke liye streaming config - WebM format ke liye
     streaming_config = speech.StreamingRecognitionConfig(
         config=speech.RecognitionConfig(
-            encoding=speech.RecognitionConfig.AudioEncoding.WEBM_OPUS, # Frontend se is format mein bhejenge
+            encoding=speech.RecognitionConfig.AudioEncoding.WEBM_OPUS, # MediaRecorder default format
             sample_rate_hertz=48000,
             language_code="en-US",
             enable_automatic_punctuation=True,
+            model="latest_long",  # Better for longer audio streams
         ),
         interim_results=True,
     )
@@ -49,17 +50,24 @@ async def websocket_endpoint(websocket: WebSocket):
     try:
         # Audio stream ko handle karne ke liye ek generator function banayenge
         async def audio_stream_generator():
-            while True:
-                # Frontend se audio chunk (bytes) receive karein
-                audio_chunk = await websocket.receive_bytes()
-                yield speech.StreamingRecognizeRequest(audio_content=audio_chunk)
+            try:
+                while True:
+                    # Frontend se audio chunk (bytes) receive karein
+                    audio_chunk = await websocket.receive_bytes()
+                    if audio_chunk:
+                        yield speech.StreamingRecognizeRequest(audio_content=audio_chunk)
+            except Exception as e:
+                print(f"Error in audio stream generator: {e}")
+                return
 
         # STT API se responses receive karein
+        print("Starting speech recognition...")
         responses = speech_client.streaming_recognize(
             config=streaming_config,
             requests=audio_stream_generator()
         )
 
+        print("Processing audio stream...")
         for response in responses:
             if not response.results:
                 continue
@@ -81,16 +89,26 @@ async def websocket_endpoint(websocket: WebSocket):
                 The user was asked the following question: "{transcript}"
                 Provide a concise and helpful answer in 3-4 bullet points.
                 The response should be directly useful to the user in a live interview.
+                Focus on giving practical, actionable advice.
                 """
 
-                # Gemini se response generate karein
-                gemini_response = gemini_model.generate_content(prompt)
+                try:
+                    # Gemini se response generate karein
+                    print("Generating AI suggestion...")
+                    gemini_response = gemini_model.generate_content(prompt)
 
-                # Frontend ko suggestion bhejein
-                await websocket.send_json({
-                    "type": "suggestion",
-                    "text": gemini_response.text
-                })
+                    # Frontend ko suggestion bhejein
+                    await websocket.send_json({
+                        "type": "suggestion",
+                        "text": gemini_response.text
+                    })
+                    print("Suggestion sent to frontend")
+                except Exception as e:
+                    print(f"Error generating suggestion: {e}")
+                    await websocket.send_json({
+                        "type": "error",
+                        "text": "Sorry, I couldn't generate a suggestion right now."
+                    })
 
             else:
                 # Interim (beech ka) result frontend ko bhej sakte hain (optional)
@@ -104,7 +122,10 @@ async def websocket_endpoint(websocket: WebSocket):
         print("Client disconnected.")
     except Exception as e:
         print(f"An error occurred: {e}")
-        await websocket.close(code=1011, reason=str(e))
+        try:
+            await websocket.close(code=1011, reason=str(e))
+        except:
+            pass
 
 # --- Server Run Command ---
 # Is server ko chalane ke liye terminal mein yeh command likhein:
