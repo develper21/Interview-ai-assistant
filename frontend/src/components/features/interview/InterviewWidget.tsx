@@ -14,7 +14,6 @@ const InterviewWidget = () => {
   // Refs for WebSocket and MediaRecorder
   const socketRef = useRef<WebSocket | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const audioChunksRef = useRef<Blob[]>([]);
 
   // Function to handle WebSocket and MediaRecorder cleanup
   const cleanup = () => {
@@ -54,34 +53,76 @@ const InterviewWidget = () => {
       
       socketRef.current.onopen = async () => {
         setStatus('Listening');
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        mediaRecorderRef.current = new MediaRecorder(stream);
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia({
+            audio: {
+              echoCancellation: true,
+              noiseSuppression: true,
+              sampleRate: 48000
+            }
+          });
 
-        mediaRecorderRef.current.ondataavailable = (event) => {
-          if (event.data.size > 0 && socketRef.current?.readyState === WebSocket.OPEN) {
-            socketRef.current.send(event.data);
+          // WebM Opus format for better compatibility with Google Speech-to-Text
+          let options: MediaRecorderOptions = {
+            mimeType: 'audio/webm;codecs=opus'
+          };
+
+          // Check if the browser supports the desired format
+          if (!MediaRecorder.isTypeSupported(options.mimeType!)) {
+            console.warn('WebM Opus not supported, using default format');
+            options = {};
           }
-        };
 
-        // Send audio data every 2 seconds
-        mediaRecorderRef.current.start(2000); 
-      };
+          mediaRecorderRef.current = new MediaRecorder(stream, options);
 
-      socketRef.current.onmessage = (event) => {
-        const data = JSON.parse(event.data); // Assuming backend sends JSON
-        if (data.type === 'transcript') {
-            setTranscribedText(data.text);
-        } else if (data.type === 'suggestion') {
-            setSuggestion(data.text);
+          mediaRecorderRef.current.ondataavailable = (event) => {
+            if (event.data.size > 0 && socketRef.current?.readyState === WebSocket.OPEN) {
+              socketRef.current.send(event.data);
+            }
+          };
+
+          mediaRecorderRef.current.onerror = (event) => {
+            console.error('MediaRecorder error:', event);
+            setStatus('Error');
+            setIsListening(false);
+            cleanup();
+          };
+
+          // Send audio data every 1 second for better real-time performance
+          mediaRecorderRef.current.start(1000);
+        } catch (streamError) {
+          console.error('Error accessing microphone:', streamError);
+          setStatus('Error');
+          setIsListening(false);
         }
       };
 
-      socketRef.current.onclose = () => {
+      socketRef.current.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          if (data.type === 'transcript') {
+              setTranscribedText(data.text);
+          } else if (data.type === 'suggestion') {
+              setSuggestion(data.text);
+          } else if (data.type === 'error') {
+              console.error('Backend error:', data.text);
+              setStatus('Error');
+              setIsListening(false);
+              cleanup();
+          }
+        } catch (parseError) {
+          console.error('Error parsing WebSocket message:', parseError);
+        }
+      };
+
+      socketRef.current.onclose = (event) => {
+        console.log('WebSocket connection closed:', event.code, event.reason);
         setStatus('Idle');
         setIsListening(false);
       };
 
-      socketRef.current.onerror = () => {
+      socketRef.current.onerror = (error) => {
+        console.error('WebSocket error:', error);
         setStatus('Error');
         setIsListening(false);
         cleanup();
@@ -112,11 +153,27 @@ const InterviewWidget = () => {
         </Button>
       </CardHeader>
       <CardContent className="flex-1 flex flex-col gap-4 overflow-auto">
+        {/* Status Indicator */}
+        <div className="bg-gray-900/50 p-3 rounded-lg">
+          <div className="flex items-center gap-2">
+            <div className={`w-2 h-2 rounded-full ${
+              status === 'Listening' ? 'bg-green-500' :
+              status === 'Connecting' ? 'bg-yellow-500 animate-pulse' :
+              status === 'Error' ? 'bg-red-500' : 'bg-gray-500'
+            }`} />
+            <span className="text-sm text-gray-300">
+              Status: {status === 'Listening' ? 'Listening for questions...' :
+                      status === 'Connecting' ? 'Connecting...' :
+                      status === 'Error' ? 'Connection Error' : 'Ready'}
+            </span>
+          </div>
+        </div>
+
         {/* Transcribed Text Section */}
         <div className="bg-gray-900/50 p-4 rounded-lg min-h-[100px]">
           <h4 className="text-sm font-semibold text-gray-400 mb-2">Interviewer Question:</h4>
           <p className="text-gray-200">
-            {transcribedText || (isListening ? 'Listening...' : 'Start the session to see the transcript.')}
+            {transcribedText || (isListening ? 'Listening for interviewer questions...' : 'Start the session to see the transcript.')}
           </p>
         </div>
         
